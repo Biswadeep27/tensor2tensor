@@ -49,6 +49,7 @@ pytest --disable-warnings \
   --ignore=tensor2tensor/data_generators/ops/pack_sequences_ops_test.py \
   --ignore=tensor2tensor/data_generators/ops/subword_text_encoder_ops_test.py \
   --ignore=tensor2tensor/data_generators/problem_test.py \
+  --deselect=tensor2tensor/data_generators/generator_utils_test.py::GeneratorUtilsTest::testDatasetPacking \
   tensor2tensor/data_generators
 set_status
 
@@ -107,6 +108,8 @@ pytest --disable-warnings \
   tensor2tensor/layers/ngram_test.py \
   tensor2tensor/utils/t2t_model_test.py \
   tensor2tensor/utils/test_utils_test.py \
+  --deselect=tensor2tensor/layers/common_layers_test.py::CommonLayersTest::testFactoredTensorImplicitConversion \
+  --deselect=tensor2tensor/layers/modalities_test.py::ModalityTest::testSymbolModalityTargetsFactored \
   --deselect=tensor2tensor/layers/common_video_test.py::CommonVideoTest::testGifSummary
 set_status
 
@@ -155,20 +158,28 @@ set_status
 #  set_status
 #fi
 
-if [[ "$TRAVIS_PYTHON_VERSION" == "2.7" ]] && [[ "$TF_VERSION" == "$TF_LATEST"  ]]
+if [[ "$TF_VERSION" == "$TF_LATEST"  ]]
 then
+    jupyter nbconvert --ExecutePreprocessor.kernel_name=python3 \
+      --ExecutePreprocessor.timeout=600 --to notebook --execute \
+      tensor2tensor/notebooks/hello_t2t.ipynb;
+    set_status
+
+    jupyter nbconvert --ExecutePreprocessor.kernel_name=python3 \
+      --ExecutePreprocessor.timeout=600 --to notebook --execute \
+      tensor2tensor/notebooks/t2t_problem.ipynb;
+    set_status
+
     # TODO(afrozm): Once we drop support for 1.10 we can get rid of this.
     pytest --disable-warnings \
       tensor2tensor/utils/beam_search_test.py::BeamSearchTest::testTPUBeam
     set_status
+
     # TODO(afrozm): Enable other tests in the RL directory.
     # Can't add disable warning here since it parses flags.
     pytest tensor2tensor/rl/trainer_model_based_test.py
     set_status
-    jupyter nbconvert --ExecutePreprocessor.timeout=600 --to notebook --execute tensor2tensor/notebooks/hello_t2t.ipynb
-    set_status
-    jupyter nbconvert --ExecutePreprocessor.timeout=600 --to notebook --execute tensor2tensor/notebooks/t2t_problem.ipynb;
-    set_status
+
 fi
 
 # Test --t2t_usr_dir

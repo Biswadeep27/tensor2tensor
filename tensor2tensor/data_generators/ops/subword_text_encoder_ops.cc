@@ -14,6 +14,7 @@ using ::tensorflow::OpKernelContext;
 using ::tensorflow::Status;
 using ::tensorflow::Tensor;
 using ::tensorflow::TensorShape;
+using ::tensorflow::tstring;
 using ::tensorflow::shape_inference::InferenceContext;
 
 REGISTER_OP("SubwordTextEncoderEncode")
@@ -29,14 +30,14 @@ class SubwordTextEncoderEncodeOp : public OpKernel {
  public:
   explicit SubwordTextEncoderEncodeOp(
       OpKernelConstruction* ctx) : OpKernel(ctx) {
-    string vocab_filename;
+    std::string vocab_filename;
     OP_REQUIRES_OK(ctx, ctx->GetAttr("vocab_filename", &vocab_filename));
     encoder_ = absl::make_unique<SubwordTextEncoder>(vocab_filename);
   }
 
   void Compute(OpKernelContext* ctx) override {
     // Get input string and deserialize into ArticleExample proto.
-    const string& s = ctx->input(0).scalar<string>()();
+    absl::string_view s = ctx->input(0).scalar<tstring>()();
 
     // Construct encoded output tensors.
     std::vector<int> encoded_ids;

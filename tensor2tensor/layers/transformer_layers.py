@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2019 The Tensor2Tensor Authors.
+# Copyright 2021 The Tensor2Tensor Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@ from tensor2tensor.layers import common_layers
 from tensor2tensor.utils import expert_utils
 from tensor2tensor.utils import mlperf_log
 
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 
 
 # TODO(lukaszkaiser): remove this function when not needed any more.
@@ -33,7 +33,8 @@ def layers():
 
 
 def transformer_prepare_encoder(inputs, target_space, hparams, features=None,
-                                type_ids=None, num_types=None):
+                                type_ids=None, num_types=None,
+                                reuse_target_embedding=tf.AUTO_REUSE):
   """Prepare one shard of the model for the encoder.
 
   Args:
@@ -45,6 +46,8 @@ def transformer_prepare_encoder(inputs, target_space, hparams, features=None,
     type_ids: optional, an int64 Tensor of shape [batch, length] that allows
       for adding type embeddings, similar to positional embeddings.
     num_types: optional, an int that decides the number of types in type_ids.
+    reuse_target_embedding: option to reuse variable name in the case that
+      symbol modalities are reused between inputs/targets.
 
   Returns:
     encoder_input: a Tensor, bottom of encoder stack
@@ -98,7 +101,8 @@ def transformer_prepare_encoder(inputs, target_space, hparams, features=None,
         32,
         ishape_static[-1],
         name="target_space_embedding",
-        dtype=hparams.get("activation_dtype", "float32"))
+        dtype=hparams.get("activation_dtype", "float32"),
+        reuse=reuse_target_embedding)
     emb_target_space = tf.reshape(emb_target_space, [1, 1, -1])
     encoder_input += emb_target_space
   if hparams.pos == "timing":
@@ -107,6 +111,9 @@ def transformer_prepare_encoder(inputs, target_space, hparams, features=None,
           encoder_input, inputs_position)
     else:
       encoder_input = common_attention.add_timing_signal_1d(encoder_input)
+  elif hparams.pos == "timing_from_features":
+    encoder_input = common_attention.add_timing_signals_from_features(
+        encoder_input, features, hparams.position_features)
   elif hparams.pos == "emb":
     encoder_input = common_attention.add_positional_embedding(
         encoder_input, hparams.max_length, "inputs_positional_embedding",

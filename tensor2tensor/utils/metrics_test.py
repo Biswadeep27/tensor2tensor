@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2019 The Tensor2Tensor Authors.
+# Copyright 2021 The Tensor2Tensor Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@ from __future__ import print_function
 import numpy as np
 from tensor2tensor.utils import metrics
 
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 
 
 class MetricsTest(tf.test.TestCase):
@@ -90,6 +90,50 @@ class MetricsTest(tf.test.TestCase):
       actual = session.run(a)
     self.assertEqual(actual, expected)
 
+  def testTwoClassAccuracyMetric(self):
+    predictions = tf.constant([0.0, 0.2, 0.4, 0.6, 0.8, 1.0], dtype=tf.float32)
+    targets = tf.constant([0, 0, 1, 0, 1, 1], dtype=tf.int32)
+    expected = 2.0 / 3.0
+    with self.test_session() as session:
+      accuracy, _ = metrics.two_class_accuracy(predictions, targets)
+      session.run(tf.global_variables_initializer())
+      session.run(tf.local_variables_initializer())
+      actual = session.run(accuracy)
+    self.assertAlmostEqual(actual, expected)
+
+  def testTwoClassLogLikelihood(self):
+    predictions = np.array([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
+    targets = np.array([0, 0, 1, 0, 1, 1])
+    expected = (2.0 * np.log(0.8) + 2.0 * np.log(0.4)) / 6.0
+    with self.test_session() as session:
+      avg_log_likelihood, _ = metrics.two_class_log_likelihood(
+          predictions, targets)
+      actual = session.run(avg_log_likelihood)
+    self.assertAlmostEqual(actual, expected)
+
+  def testTwoClassLogLikelihoodVersusOldImplementation(self):
+    def alt_two_class_log_likelihood_impl(predictions, labels):
+      float_labels = tf.cast(labels, dtype=tf.float64)
+      float_predictions = tf.cast(tf.squeeze(predictions), dtype=tf.float64)
+      # likelihood should be just p for class 1, and 1 - p for class 0.
+      # signs is 1 for class 1, and -1 for class 0
+      signs = 2 * float_labels - tf.ones_like(float_labels)
+      # constant_term is 1 for class 0, and 0 for class 1.
+      constant_term = tf.ones_like(float_labels) - float_labels
+      likelihoods = constant_term + signs * float_predictions
+      log_likelihoods = tf.log(likelihoods)
+      avg_log_likelihood = tf.reduce_mean(log_likelihoods)
+      return avg_log_likelihood
+    predictions = np.random.rand(1, 10, 1)
+    targets = np.random.randint(2, size=10)
+    with self.test_session() as session:
+      new_log_likelihood, _ = metrics.two_class_log_likelihood(
+          predictions, targets)
+      alt_log_likelihood = alt_two_class_log_likelihood_impl(
+          predictions, targets)
+      new_impl, alt_impl = session.run([new_log_likelihood, alt_log_likelihood])
+    self.assertAlmostEqual(new_impl, alt_impl)
+
   def testRMSEMetric(self):
     predictions = np.full((10, 1), 1)  # All 1's
     targets = np.full((10, 1), 3)  # All 3's
@@ -100,6 +144,18 @@ class MetricsTest(tf.test.TestCase):
           tf.constant(targets, dtype=tf.int32))
       session.run(tf.global_variables_initializer())
       actual = session.run(rmse)
+    self.assertEqual(actual, expected)
+
+  def testUnpaddedRMSEMetric(self):
+    predictions = np.full((10, 1), 1)  # All 1's
+    targets = np.full((10, 1), 3)  # All 3's
+    expected = np.mean((predictions - targets)**2)  # MSE = 4.0
+    with self.test_session() as session:
+      mse, _ = metrics.unpadded_mse(
+          tf.constant(predictions, dtype=tf.int32),
+          tf.constant(targets, dtype=tf.int32))
+      session.run(tf.global_variables_initializer())
+      actual = session.run(mse)
     self.assertEqual(actual, expected)
 
   def testSequenceEditDistanceMetric(self):

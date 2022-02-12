@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2019 The Tensor2Tensor Authors.
+# Copyright 2021 The Tensor2Tensor Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,14 +23,15 @@ import os
 
 from tensor2tensor.utils import hparams_lib
 
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 
 
 class HparamsLibTest(tf.test.TestCase):
 
   def testCreateHparamsFromJson(self):
     # Get json_path
-    pkg, _ = os.path.split(__file__)
+    pkg = os.path.abspath(__file__)
+    pkg, _ = os.path.split(pkg)
     pkg, _ = os.path.split(pkg)
     json_path = os.path.join(
         pkg, "test_data", "transformer_test_ckpt", "hparams.json")

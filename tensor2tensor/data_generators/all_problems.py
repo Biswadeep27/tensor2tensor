@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2019 The Tensor2Tensor Authors.
+# Copyright 2021 The Tensor2Tensor Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -39,6 +39,11 @@ MODULES = [
     "tensor2tensor.data_generators.cola",
     "tensor2tensor.data_generators.common_voice",
     "tensor2tensor.data_generators.desc2code",
+    "tensor2tensor.data_generators.dialog_cornell",
+    "tensor2tensor.data_generators.dialog_dailydialog",
+    "tensor2tensor.data_generators.dialog_opensubtitles",
+    "tensor2tensor.data_generators.dialog_personachat",
+    "tensor2tensor.data_generators.enwik8",
     "tensor2tensor.data_generators.fsns",
     "tensor2tensor.data_generators.function_docstring",
     "tensor2tensor.data_generators.gene_expression",
@@ -68,6 +73,7 @@ MODULES = [
     "tensor2tensor.data_generators.quora_qpairs",
     "tensor2tensor.data_generators.rte",
     "tensor2tensor.data_generators.scitail",
+    "tensor2tensor.data_generators.seq2edits",
     "tensor2tensor.data_generators.snli",
     "tensor2tensor.data_generators.stanford_nli",
     "tensor2tensor.data_generators.style_transfer",
@@ -76,6 +82,7 @@ MODULES = [
     "tensor2tensor.data_generators.subject_verb_agreement",
     "tensor2tensor.data_generators.timeseries",
     "tensor2tensor.data_generators.transduction_problems",
+    "tensor2tensor.data_generators.translate_encs_cubbitt",
     "tensor2tensor.data_generators.translate_encs",
     "tensor2tensor.data_generators.translate_ende",
     "tensor2tensor.data_generators.translate_enes",
@@ -107,9 +114,11 @@ ALL_MODULES = list(MODULES)
 def _is_import_err_msg(err_str, module):
   parts = module.split(".")
   suffixes = [".".join(parts[i:]) for i in range(len(parts))]
-  return err_str in (
-      ["No module named %s" % suffix for suffix in suffixes] +
-      ["No module named '%s'" % suffix for suffix in suffixes])
+  prefixes = [".".join(parts[:i]) for i in range(len(parts))]
+  return err_str in (["No module named %s" % suffix for suffix in suffixes] +
+                     ["No module named '%s'" % suffix for suffix in suffixes] +
+                     ["No module named %s" % prefix for prefix in prefixes] +
+                     ["No module named '%s'" % prefix for prefix in prefixes])
 
 
 def _handle_errors(errors):
@@ -121,11 +130,11 @@ def _handle_errors(errors):
   print(err_msg.format(num_missing=len(errors)))
   for module, err in errors:
     err_str = str(err)
+    if log_all:
+      print("Did not import module: %s; Cause: %s" % (module, err_str))
     if not _is_import_err_msg(err_str, module):
       print("From module %s" % module)
       raise err
-    if log_all:
-      print("Did not import module: %s; Cause: %s" % (module, err_str))
 
 
 def import_modules(modules):

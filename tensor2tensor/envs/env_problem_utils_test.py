@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2019 The Tensor2Tensor Authors.
+# Copyright 2021 The Tensor2Tensor Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@ from tensor2tensor.envs import gym_env_problem
 from tensor2tensor.envs import tic_tac_toe_env  # pylint: disable=unused-import
 from tensor2tensor.envs import tic_tac_toe_env_problem
 
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 
 
 class EnvProblemUtilsTest(tf.test.TestCase):
@@ -53,8 +53,9 @@ class EnvProblemUtilsTest(tf.test.TestCase):
     # Let's make sure that at-most 4 observations come to the policy function.
     len_history_for_policy = 4
 
-    def policy_fun(observations, state=None, rng=None):
-      b, t = observations.shape[:2]
+    def policy_fun(observations, lengths, state=None, rng=None):
+      del lengths
+      b = observations.shape[0]
       # Assert that observations from time-step len_history_for_policy onwards
       # are zeros.
       self.assertTrue(
@@ -62,10 +63,10 @@ class EnvProblemUtilsTest(tf.test.TestCase):
       self.assertFalse(
           np.all(observations[:, :len_history_for_policy, ...] == 0))
       a = env.action_space.n
-      p = np.random.uniform(size=(b, t, a))
+      p = np.random.uniform(size=(b, 1, a))
       p = np.exp(p)
       p = p / np.sum(p, axis=-1, keepdims=True)
-      return np.log(p), np.log(p), state, rng
+      return np.log(p), np.mean(p, axis=-1), state, rng
 
     max_timestep = 15
     num_trajectories = 2

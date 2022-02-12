@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2019 The Tensor2Tensor Authors.
+# Copyright 2021 The Tensor2Tensor Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,8 +26,9 @@ from tensor2tensor.layers import common_attention
 from tensor2tensor.layers import common_layers
 from tensor2tensor.models import transformer
 from tensor2tensor.utils import registry
+from tensor2tensor.utils import t2t_model
 
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 
 # pylint: disable=g-direct-tensorflow-import
 from tensorflow.python.ops import inplace_ops
@@ -70,7 +71,32 @@ class EvolvedTransformer(transformer.Transformer):
     super(EvolvedTransformer, self).__init__(*args, **kwargs)
     self._encoder_function = evolved_transformer_encoder
     self._decoder_function = evolved_transformer_decoder
-    self._init_cache_fn = _init_evolved_transformer_cache
+    self._init_cache_fn = init_evolved_transformer_cache
+
+    # -1 means train all weights.
+    if self.hparams.get("num_trainable_top_decoder_layers", -1) < 0:
+      t2t_model.log_info(
+          "num_trainable_top_decoder_layers is negative so training all weights."
+      )
+    elif self.hparams.shared_embedding_and_softmax_weights:
+      t2t_model.log_info(
+          "Setting hparams.shared_embedding_and_softmax_weights to False, "
+          "because hparam.num_trainable_top_decoder_layers is being used.")
+
+      # When hparam.num_trainable_top_decoder_layers is set to N >= 0 we will
+      # freeze (not train) every variable except the N top decoder layers and
+      # the (pre-)softmax matrix. For any N >= 0 we will freeze the encoder and
+      # input/target embeddings. This also means we will not share the
+      # (pre-)softmax matrix with input/target embeddings otherwise they will be
+      # trained as well.
+      self.hparams.shared_embedding_and_softmax_weights = False
+
+      # If hparams.shared_embedding_and_softmax_weights was previously True,
+      # then input and target embeddings were being shared.
+      # To make sure it they embeddings continue to be shared, we need to set
+      # hparams.shared_embedding to True.
+      self.hparams.shared_embedding = True
+    self._init_cache_fn = init_evolved_transformer_cache
 
 
 def evolved_transformer_encoder(encoder_input,
@@ -197,34 +223,35 @@ def evolved_transformer_encoder(encoder_input,
           hidden_state = common_layers.layer_postprocess(
               residual_state, hidden_state, hparams)
 
-        with tf.variable_scope("self_attention"):
-          residual_state = hidden_state
-          hidden_state = common_layers.layer_preprocess(hidden_state, hparams)
+        if hparams.get("et_encoder_self_attention", True):
+          with tf.variable_scope("self_attention"):
+            residual_state = hidden_state
+            hidden_state = common_layers.layer_preprocess(hidden_state, hparams)
 
-          hidden_state = common_attention.multihead_attention(
-              hidden_state,
-              None,
-              encoder_self_attention_bias,
-              hparams.attention_key_channels or hparams.hidden_size,
-              hparams.attention_value_channels or hparams.hidden_size,
-              hparams.hidden_size,
-              hparams.num_heads,
-              hparams.attention_dropout,
-              attention_type=hparams.self_attention_type,
-              max_relative_position=hparams.max_relative_position,
-              heads_share_relative_embedding=(
-                  hparams.heads_share_relative_embedding),
-              add_relative_to_values=hparams.add_relative_to_values,
-              save_weights_to=save_weights_to,
-              make_image_summary=make_image_summary,
-              dropout_broadcast_dims=attention_dropout_broadcast_dims,
-              max_length=hparams.get("max_length"),
-              vars_3d=hparams.get("attention_variables_3d"),
-              activation_dtype=hparams.get("activation_dtype", "float32"),
-              weight_dtype=hparams.get("weight_dtype", "float32"))
+            hidden_state = common_attention.multihead_attention(
+                hidden_state,
+                None,
+                encoder_self_attention_bias,
+                hparams.attention_key_channels or hparams.hidden_size,
+                hparams.attention_value_channels or hparams.hidden_size,
+                hparams.hidden_size,
+                hparams.num_heads,
+                hparams.attention_dropout,
+                attention_type=hparams.self_attention_type,
+                max_relative_position=hparams.max_relative_position,
+                heads_share_relative_embedding=(
+                    hparams.heads_share_relative_embedding),
+                add_relative_to_values=hparams.add_relative_to_values,
+                save_weights_to=save_weights_to,
+                make_image_summary=make_image_summary,
+                dropout_broadcast_dims=attention_dropout_broadcast_dims,
+                max_length=hparams.get("max_length"),
+                vars_3d=hparams.get("attention_variables_3d"),
+                activation_dtype=hparams.get("activation_dtype", "float32"),
+                weight_dtype=hparams.get("weight_dtype", "float32"))
 
-          hidden_state = common_layers.layer_postprocess(
-              residual_state, hidden_state, hparams)
+            hidden_state = common_layers.layer_postprocess(
+                residual_state, hidden_state, hparams)
 
         with tf.variable_scope("dense_layers"):
           residual_state = hidden_state
@@ -289,6 +316,12 @@ def evolved_transformer_decoder(decoder_input,
   """
   del losses
 
+  num_trainable_top_decoder_layers = hparams.get(
+      "num_trainable_top_decoder_layers", -1)  # -1 means train all weights.
+
+  if num_trainable_top_decoder_layers >= 0:
+    encoder_output = tf.stop_gradient(encoder_output)
+
   attention_dropout_broadcast_dims = (
       common_layers.comma_separated_string_to_integer_list(
           getattr(hparams, "attention_dropout_broadcast_dims", "")))
@@ -296,7 +329,10 @@ def evolved_transformer_decoder(decoder_input,
   with tf.variable_scope(name):
     hidden_state = decoder_input
 
-    for layer in range(hparams.num_decoder_layers or hparams.num_hidden_layers):
+    num_layers = hparams.num_decoder_layers or hparams.num_hidden_layers
+    for layer in range(num_layers):
+      if num_trainable_top_decoder_layers == num_layers - layer:
+        hidden_state = tf.stop_gradient(hidden_state)
       layer_name = "layer_%d" % layer
       layer_cache = cache[layer_name] if cache is not None else None
       with tf.variable_scope(layer_name):
@@ -586,7 +622,10 @@ def evolved_transformer_decoder(decoder_input,
           hidden_state = common_layers.layer_postprocess(
               residual_state, hidden_state, hparams)
 
-    return common_layers.layer_preprocess(hidden_state, hparams)
+    decoder_output = common_layers.layer_preprocess(hidden_state, hparams)
+    if num_trainable_top_decoder_layers == 0:
+      decoder_output = tf.stop_gradient(decoder_output)
+    return decoder_output
 
 
 def _add_attend_to_encoder_cache(cache, attention_name, hparams, num_layers,
@@ -617,10 +656,10 @@ def _add_attend_to_encoder_cache(cache, attention_name, hparams, num_layers,
   return cache
 
 
-def _init_evolved_transformer_cache(cache, hparams, batch_size,
-                                    attention_init_length, encoder_output,
-                                    encoder_decoder_attention_bias,
-                                    scope_prefix):
+def init_evolved_transformer_cache(cache, hparams, batch_size,
+                                   attention_init_length, encoder_output,
+                                   encoder_decoder_attention_bias,
+                                   scope_prefix):
   """Create the initial cache for Evolved Transformer fast decoding."""
   key_channels = hparams.attention_key_channels or hparams.hidden_size
   value_channels = hparams.attention_value_channels or hparams.hidden_size
@@ -728,6 +767,15 @@ def add_evolved_transformer_hparams(hparams):
 
 
 @registry.register_hparams
+def evolved_transformer_tiny():
+  """Base parameters for Evolved Transformer model."""
+  hparams = add_evolved_transformer_hparams(transformer.transformer_tiny())
+  hparams.learning_rate_schedule = (
+      "constant*single_cycle_cos_decay")
+  return hparams
+
+
+@registry.register_hparams
 def evolved_transformer_base():
   """Base parameters for Evolved Transformer model."""
   return add_evolved_transformer_hparams(transformer.transformer_base())
@@ -766,4 +814,20 @@ def evolved_transformer_big_tpu():
   hparams.learning_rate_constant = 1 / hparams.learning_rate_warmup_steps ** 0.5
   hparams.learning_rate_schedule = (
       "constant*single_cycle_cos_decay")
+  return hparams
+
+
+@registry.register_hparams
+def evolved_transformer_tpu_basic():
+  """Basic Seq2Seq TPU hyper-parameters."""
+  hparams = transformer.transformer_big_tpu()
+  hparams.add_hparam("print_vars", False)
+  hparams.batch_size = 8192
+  hparams.max_length = 256
+
+  # N < 0 means all weights in the model are trainable.
+  # N >= 0 means all weights are frozen except N top decoder layers +
+  # (pre-)softmax matrix (that projects from hidden size to vocab size).
+  hparams.add_hparam("num_trainable_top_decoder_layers", -1)
+
   return hparams

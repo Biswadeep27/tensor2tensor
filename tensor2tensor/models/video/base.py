@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2019 The Tensor2Tensor Authors.
+# Copyright 2021 The Tensor2Tensor Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ from tensor2tensor.layers import modalities
 from tensor2tensor.utils import registry
 from tensor2tensor.utils import t2t_model
 
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 
 
 def flat_lists(list_of_lists):
@@ -381,6 +381,7 @@ class NextFrameBase(t2t_model.T2TModel):
     # TODO(lukaszkaiser): the logic below heavily depend on the current
     # (a bit strange) video modalities - we should change that.
 
+    sampled_frame = pred_frame
     if self.is_per_pixel_softmax:
       frame_shape = common_layers.shape_list(pred_frame)
       target_shape = frame_shape[:-1] + [self.hparams.problem.num_channels]
@@ -389,13 +390,7 @@ class NextFrameBase(t2t_model.T2TModel):
           sampled_frame, temperature=self.hparams.pixel_sampling_temperature)
       # TODO(lukaszkaiser): this should be consistent with modality.bottom()
       # sampled_frame = common_layers.standardize_images(sampled_frame)
-      sampled_frame = tf.to_float(sampled_frame)
-    else:
-      x = common_layers.convert_real_to_rgb(pred_frame)
-      x = x - tf.stop_gradient(x + tf.round(x))
-      x = common_layers.convert_rgb_to_real(x)
-      return x
-    return sampled_frame
+    return tf.to_float(sampled_frame)
 
   def __get_next_inputs(self, index, all_frames, all_actions, all_rewards):
     """Get inputs for next prediction iteration.

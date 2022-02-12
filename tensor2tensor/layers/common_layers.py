@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2019 The Tensor2Tensor Authors.
+# Copyright 2021 The Tensor2Tensor Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,10 +23,12 @@ import contextlib
 import functools
 import math
 
+from absl import logging
 import numpy as np
 from six.moves import range  # pylint: disable=redefined-builtin
 
-import tensorflow as tf
+from tensor2tensor.utils import contrib
+import tensorflow.compat.v1 as tf
 import tensorflow_probability as tfp
 
 from tensorflow.python.framework import function
@@ -35,24 +37,21 @@ from tensorflow.python.ops import control_flow_util
 from tensorflow.python.ops import inplace_ops
 
 
-_cached_layers = None
-
-
 # TODO(lukaszkaiser): remove this function when not needed any more.
 def layers():
   """Get the layers module good for TF 1 and TF 2 work for now."""
-  global _cached_layers
-  if _cached_layers is not None:
-    return _cached_layers
-  layers_module = tf.layers
+  layers_module = None
+  try:
+    layers_module = tf.layers
+  except AttributeError:
+    logging.info("Cannot access tf.layers, trying TF2 layers.")
   try:
     from tensorflow.python import tf2  # pylint: disable=g-direct-tensorflow-import,g-import-not-at-top
     if tf2.enabled():
-      tf.logging.info("Running in V2 mode, using Keras layers.")
+      logging.info("Running in V2 mode, using Keras layers.")
       layers_module = tf.keras.layers
   except ImportError:
     pass
-  _cached_layers = layers_module
   return layers_module
 
 
@@ -2206,12 +2205,12 @@ def gated_linear_unit_layer(x, name=None):
     return x * tf.nn.sigmoid(gating_x)
 
 
-def sru_with_scan(x,
-                  num_layers=2,
-                  activation=None,
-                  initial_state=None,
-                  name=None,
-                  reuse=None):
+def sru(x,
+        num_layers=2,
+        activation=None,
+        initial_state=None,
+        name=None,
+        reuse=None):
   """SRU cell as in https://arxiv.org/abs/1709.02755.
 
   This implementation uses tf.scan and can incur overhead, see the full SRU
@@ -2266,94 +2265,6 @@ def sru_with_scan(x,
       x = h  # Next layer.
     # Transpose back to batch-major.
     x = tf.transpose(x, [1, 0, 2])
-    return tf.reshape(x, x_shape)
-
-
-class CumsumprodCell(object):
-  """Cumulative sum and product object for use with functional_rnn API."""
-
-  def __init__(self, initializer):
-    self._initializer = initializer
-
-  @property
-  def output_size(self):
-    return int(shape_list(self._initializer)[-1])
-
-  def zero_state(self, batch_size, dtype):
-    dtype = dtype or tf.float32
-    return tf.zeros([batch_size, self.output_size], dtype=dtype)
-
-  def __call__(self, inputs_t, state_t):
-    cur_x_times_one_minus_f, cur_f = tf.split(inputs_t, 2, axis=-1)
-    state_next = cur_f * state_t + cur_x_times_one_minus_f
-    outputs_t = state_next
-    return outputs_t, state_next
-
-
-def sru(x,
-        num_layers=2,
-        activation=None,
-        initial_state=None,
-        name=None,
-        reuse=None):
-  """SRU cell as in https://arxiv.org/abs/1709.02755.
-
-  As defined in the paper:
-  (1) x'_t = W x_t
-  (2) f_t = sigmoid(Wf x_t + bf)
-  (3) r_t = sigmoid(Wr x_t + br)
-  (4) c_t = f_t * c_{t-1} + (1 - f_t) * x'_t
-  (5) h_t = r_t * activation(c_t) + (1 - r_t) * x_t
-
-  This version uses functional ops to be faster on GPUs with TF-1.9+.
-
-  Args:
-    x: A tensor of shape [batch, ..., channels] ; ... is treated as time.
-    num_layers: How many SRU layers; default is 2 as results for 1 disappoint.
-    activation: Optional activation function, try tf.nn.tanh or tf.nn.relu.
-    initial_state: Optional initial c-state, set to zeros if None.
-    name: Optional name, "sru" by default.
-    reuse: Optional reuse.
-
-  Returns:
-    A tensor of the same shape as x.
-
-  Raises:
-    ValueError: if num_layers is not positive.
-  """
-  if num_layers < 1:
-    raise ValueError("Number of layers must be positive: %d" % num_layers)
-  if is_xla_compiled():  # On TPU the XLA does a good job with while.
-    return sru_with_scan(x, num_layers, activation, initial_state, name, reuse)
-  try:
-    from tensorflow.contrib.recurrent.python.ops import functional_rnn  # pylint: disable=g-import-not-at-top
-  except ImportError:
-    tf.logging.info("functional_rnn not found, using sru_with_scan instead")
-    return sru_with_scan(x, num_layers, activation, initial_state, name, reuse)
-
-  with tf.variable_scope(name, default_name="sru", values=[x], reuse=reuse):
-    # We assume x is [batch, ..., channels] and treat all ... as time.
-    x_shape = shape_list(x)
-    x = tf.reshape(x, [x_shape[0], -1, x_shape[-1]])
-    initial_state = initial_state or tf.zeros([x_shape[0], x_shape[-1]])
-    cell = CumsumprodCell(initial_state)
-    # Calculate SRU on each layer.
-    for i in range(num_layers):
-      # The parallel part of the SRU.
-      x_orig = x
-      x, f, r = tf.split(
-          layers().Dense(3 * x_shape[-1], name="kernel_%d" % i)(x), 3, axis=-1)
-      f, r = tf.sigmoid(f), tf.sigmoid(r)
-      x_times_one_minus_f = x * (1.0 - f)  # Compute in parallel for speed.
-      # Calculate states.
-      concat = tf.concat([x_times_one_minus_f, f], axis=-1)
-      c_states, _ = functional_rnn.functional_rnn(
-          cell, concat, time_major=False)
-      # Final output.
-      if activation is not None:
-        c_states = activation(c_states)
-      h = c_states * r + (1.0 - r) * x_orig
-      x = h  # Next layer.
     return tf.reshape(x, x_shape)
 
 
@@ -2586,7 +2497,7 @@ class FactoredTensor(object):
 
 def _convert_factored_tensor_to_tensor(value, *args, **kwargs):
   # call ops.convert_to_tensor to handle optional arguments appropriately
-  return ops.internal_convert_to_tensor(value.to_tensor(), *args, **kwargs)
+  return ops.convert_to_tensor(value.to_tensor(), *args, **kwargs)
 
 
 tf.register_tensor_conversion_function(FactoredTensor,
@@ -2756,7 +2667,7 @@ def _fn_with_custom_grad(fn, inputs, grad_fn, use_global_vars=False):
 
   def custom_grad_fn(op, *dys):
     """Custom grad fn applying grad_fn for identity Defun."""
-    fn_inputs, fn_vars, fn_outputs = tf.contrib.framework.nest.pack_sequence_as(
+    fn_inputs, fn_vars, fn_outputs = contrib.framework().nest.pack_sequence_as(
         defun_inputs, list(op.inputs))
     dys = list(dys)
     assert len(fn_outputs) == len(outputs)
@@ -2780,10 +2691,10 @@ def _fn_with_custom_grad(fn, inputs, grad_fn, use_global_vars=False):
       python_grad_func=custom_grad_fn,
       shape_func=lambda _: [t.get_shape() for t in outputs])
   def identity(*args):
-    _, _, outs = tf.contrib.framework.nest.pack_sequence_as(defun_inputs, args)
+    _, _, outs = contrib.framework().nest.pack_sequence_as(defun_inputs, args)
     return tuple([tf.identity(t) for t in outs])
 
-  flat_inputs = tf.contrib.framework.nest.flatten(defun_inputs)
+  flat_inputs = contrib.framework().nest.flatten(defun_inputs)
   id_out = identity(*flat_inputs)
   return id_out
 
@@ -2943,7 +2854,7 @@ def sample_with_temperature(logits, temperature, sampling_keep_top_k=-1):
     argmax = tf.argmax(tf.reshape(logits, [-1, logits_shape[-1]]), axis=1)
     return tf.reshape(argmax, logits_shape[:-1])
   else:
-    assert temperature > 0.0
+    tf.debugging.assert_greater(temperature, 0.0)
 
     if sampling_keep_top_k != -1:
       if sampling_keep_top_k <= 0:
@@ -2951,7 +2862,7 @@ def sample_with_temperature(logits, temperature, sampling_keep_top_k=-1):
 
       vocab_size = shape_list(logits)[1]
 
-      k_largest = tf.contrib.nn.nth_element(
+      k_largest = contrib.nn().nth_element(
           logits, n=sampling_keep_top_k, reverse=True)
       k_largest = tf.tile(tf.reshape(k_largest, [-1, 1]), [1, vocab_size])
 
@@ -2966,6 +2877,49 @@ def sample_with_temperature(logits, temperature, sampling_keep_top_k=-1):
     choices = tf.reshape(choices,
                          shape_list(logits)[:logits.get_shape().ndims - 1])
     return choices
+
+
+def _select_top_k(logits, top_k):
+  """Replaces logits, expect the top k highest values, with small number (-1e6).
+
+  If k is -1 don't replace anything.
+
+  Args:
+    logits: A `Tensor` of shape [batch_size, ..., vocab_size]
+    top_k: vector of batch size.
+
+  Returns:
+    A `Tensor` with same shape  as logits.
+  """
+  vocab_size = logits.shape[-1]
+
+  top_k = tf.where(
+      tf.not_equal(top_k, -1), top_k,
+      tf.ones_like(top_k) * vocab_size)
+
+  return tf.where(
+      tf.argsort(logits) < tf.reshape(top_k, [-1] + [1] *
+                                      (len(logits.shape) - 1)), logits,
+      tf.ones_like(logits) * -1e6)
+
+
+def sample_temperature_per_example(logits, temperature, sampling_keep_top_k=-1):
+  """Either random sampling with different temperature per example.
+
+  Args:
+    logits: a Tensor.
+    temperature: a float vector of same size as logits.
+    sampling_keep_top_k: If not -1, only sample from the top k logits.
+  Returns:
+    a Tensor with one fewer dimension than logits.
+  """
+  logits = _select_top_k(logits, sampling_keep_top_k)
+  logits /= tf.reshape(temperature, [-1] + [1] * (len(logits.shape) - 1))
+  reshaped_logits = tf.reshape(logits, [-1, shape_list(logits)[-1]])
+  choices = tf.multinomial(reshaped_logits, 1)
+  choices = tf.reshape(choices,
+                       shape_list(logits)[:logits.get_shape().ndims - 1])
+  return choices
 
 
 def ones_matrix_band_part(rows, cols, num_lower, num_upper, out_shape=None):
@@ -2996,7 +2950,7 @@ def ones_matrix_band_part(rows, cols, num_lower, num_upper, out_shape=None):
       band = band.reshape(out_shape)
     band = tf.constant(band, tf.float32)
   else:
-    band = tf.matrix_band_part(
+    band = tf.linalg.band_part(
         tf.ones([rows, cols]), tf.cast(num_lower, tf.int64),
         tf.cast(num_upper, tf.int64))
     if out_shape:
@@ -3045,7 +2999,7 @@ def _recompute_grad(fn, args):
     variables = [underlying_variable_ref(v) for v in variables]
     # Recompute outputs
     with tf.control_dependencies(output_grads):
-      with tf.contrib.framework.arg_scope(cached_arg_scope[0]):
+      with contrib.framework().arg_scope(cached_arg_scope[0]):
         with tf.variable_scope(cached_vs[0], reuse=True):
           outputs = fn(*inputs)
 
@@ -3065,7 +3019,7 @@ def _recompute_grad(fn, args):
   @fn_with_custom_grad(grad_fn)
   def fn_with_recompute(*args):
     cached_vs.append(tf.get_variable_scope())
-    cached_arg_scope.append(tf.contrib.framework.current_arg_scope())
+    cached_arg_scope.append(contrib.framework().current_arg_scope())
     return fn(*args)
 
   return fn_with_recompute(*args)
@@ -3406,7 +3360,7 @@ def should_generate_summaries():
   Returns:
     a boolean
   """
-  name_scope = tf.contrib.framework.get_name_scope()
+  name_scope = contrib.framework().get_name_scope()
   if name_scope and "while/" in name_scope:
     # Summaries don't work well within tf.while_loop()
     return False
@@ -3724,7 +3678,8 @@ def double_discriminator(x, filters1=128, filters2=None,
       tf.reshape(net, [batch_size, -1])
     net = tf.nn.relu(net)
     net = layers().Conv2D(
-        filters2, kernel_size, strides=strides, padding="SAME", name="conv2")(x)
+        filters2, kernel_size, strides=strides, padding="SAME",
+        name="conv2")(net)
     if pure_mean:
       net2 = tf.reduce_mean(net, [1, 2])
     else:
@@ -3820,7 +3775,7 @@ def weight_targeting(w, k):
   w = tf.reshape(w, [size, w_shape[-1]])
 
   transpose_w = tf.transpose(w)
-  thres = tf.contrib.framework.sort(tf.abs(transpose_w), axis=1)[:, k]
+  thres = contrib.framework().sort(tf.abs(transpose_w), axis=1)[:, k]
   mask = to_float(thres[None, :] >= tf.abs(w))
 
   return tf.reshape(mask, w_shape)
@@ -3834,7 +3789,7 @@ def unit_targeting(w, k):
   w = tf.reshape(w, [size, w_shape[-1]])
 
   norm = tf.norm(w, axis=0)
-  thres = tf.contrib.framework.sort(norm, axis=0)[k]
+  thres = contrib.framework().sort(norm, axis=0)[k]
   mask = to_float(thres >= norm)[None, :]
   mask = tf.tile(mask, [size, 1])
 
@@ -4088,9 +4043,6 @@ class WeightNorm(tf.keras.layers.Wrapper):
 
   def build(self, input_shape=None):
     """Build `Layer`."""
-    input_shape = tf.TensorShape(input_shape).as_list()
-    self.input_spec = layers().InputSpec(shape=input_shape)
-
     if not self.layer.built:
       self.layer.build(input_shape)
       self.layer.built = False
@@ -4117,6 +4069,7 @@ class WeightNorm(tf.keras.layers.Wrapper):
       self._compute_weights()
 
       self.layer.built = True
+    self.input_spec = self.layer.input_spec
 
     super(WeightNorm, self).build()
     self.built = True

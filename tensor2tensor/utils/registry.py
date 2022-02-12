@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2019 The Tensor2Tensor Authors.
+# Copyright 2021 The Tensor2Tensor Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -69,7 +69,7 @@ from __future__ import print_function
 import collections
 
 from tensor2tensor.utils import misc_utils
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 
 from tensorflow.python.util import tf_inspect as inspect  # pylint: disable=g-direct-tensorflow-import
 
@@ -545,13 +545,6 @@ register_pruning_params = Registries.pruning_params.register
 pruning_strategy = Registries.pruning_strategies.__getitem__
 list_pruning_strategies = lambda: sorted(Registries.pruning_strategies)
 register_pruning_strategy = Registries.pruning_strategies.register
-
-# deprecated functions - plurals inconsistent with rest
-# deprecation decorators added 2019-01-25
-attacks = tf.contrib.framework.deprecated(None, "Use registry.attack")(attack)
-pruning_strategies = tf.contrib.framework.deprecated(
-    None, "Use registry.pruning_strategy")(
-        pruning_strategy)
 
 
 def display_list_by_prefix(names_list, starting_spaces=0):

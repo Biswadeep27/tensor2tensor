@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2019 The Tensor2Tensor Authors.
+# Copyright 2021 The Tensor2Tensor Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -41,7 +41,7 @@ from tensor2tensor.utils import registry
 from tensor2tensor.utils import trainer_lib
 from tensor2tensor.utils import usr_dir
 
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 
 flags = tf.flags
 FLAGS = flags.FLAGS
@@ -63,11 +63,15 @@ flags.DEFINE_bool("disable_grappler_optimizations", False,
 
 
 def create_hparams():
+  hparams_path = None
+  if FLAGS.output_dir:
+    hparams_path = os.path.join(FLAGS.output_dir, "hparams.json")
   return trainer_lib.create_hparams(
       FLAGS.hparams_set,
       FLAGS.hparams,
       data_dir=os.path.expanduser(FLAGS.data_dir),
-      problem_name=FLAGS.problem)
+      problem_name=FLAGS.problem,
+      hparams_path=hparams_path)
 
 
 def create_decode_hparams():

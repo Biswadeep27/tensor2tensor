@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2019 The Tensor2Tensor Authors.
+# Copyright 2021 The Tensor2Tensor Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ from tensor2tensor.envs import env_problem
 from tensor2tensor.envs import env_problem_utils
 from tensor2tensor.envs import gym_env_problem
 from tensor2tensor.layers import modalities
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 
 
 class GymEnvProblemTest(tf.test.TestCase):
@@ -68,7 +68,7 @@ class GymEnvProblemTest(tf.test.TestCase):
     # Passing reward_range=None means take the reward range of the underlying
     # environment as the reward range.
     ep = gym_env_problem.GymEnvProblem(
-        base_env_name="FrozenLake-v0", batch_size=5, reward_range=None)
+        base_env_name="FrozenLake-v1", batch_size=5, reward_range=None)
     ep.assert_common_preconditions()
 
     # Assert reward range is finite here.
